@@ -1,0 +1,5 @@
+{
+  "name": "MAPPER",
+  "description": "A dynamic, D3-powered geospatial visualization tool for exploring business data. Features an interactive SVG map with zoom-dependent detail levels, realistic map markers, and AI-driven business insights.",
+  "requestFramePermissions": []
+}
