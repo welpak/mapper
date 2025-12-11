@@ -1,169 +1,150 @@
 # NC Business Atlas
 
-A dynamic, D3-powered geospatial visualization tool for exploring business data in North Carolina. Features an interactive SVG map with zoom-dependent detail levels, hierarchical navigation (State -> County -> Zip -> Business), and AI-driven business insights.
+A dynamic, D3-powered geospatial visualization tool for exploring business data in North Carolina.
 
-## Deployment Guide (Debian/Ubuntu)
+## Server Installation
 
-This guide details how to deploy the application on a Debian 11/12 or Ubuntu 20.04/22.04 LTS server using Nginx as a web server.
+This repository contains a **single setup script** (`setup.sh`) that automates the deployment on **Ubuntu, Debian, Fedora, OpenSUSE, and Arch Linux**.
 
-### Prerequisites
+It performs the following:
+1. Detects the Operating System.
+2. Installs system dependencies (Node.js 20+, Git, Build Tools).
+3. Prompts for your **Gemini API Key** (if not configured).
+4. Installs project dependencies & builds the application.
+5. Sets up an **Express.js** server managed by **PM2**.
+6. Serves the app on port **3030** (Host: `0.0.0.0`).
 
-- A server running Debian or Ubuntu.
-- Root or sudo privileges.
-- A Google Gemini API Key.
-- A domain name (optional, but recommended for SSL).
+### Instructions
 
-### Step 1: Update System & Install Basics
-
-Connect to your server via SSH and update the package repositories.
-
-```bash
-sudo apt update && sudo apt upgrade -y
-sudo apt install -y curl git nginx unzip
-```
-
-### Step 2: Install Node.js (Version 18+)
-
-This project requires Node.js to build the static assets.
+1.  **Upload** the project files to your server.
+2.  **Run** the following command in the project directory:
 
 ```bash
-# Download and setup the NodeSource repo (Node v20 LTS)
-curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+# Create the script
+cat << 'EOF' > setup.sh
+#!/bin/bash
+set -e
 
-# Install Node.js
-sudo apt install -y nodejs
+# --- Configuration ---
+PORT=3030
+SERVICE_NAME="nc-atlas"
+APP_DIR=$(pwd)
 
-# Verify installation
-node -v
-npm -v
-```
+# Colors
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+RED='\033[0;31m'
+NC='\033[0m' # No Color
 
-### Step 3: Clone or Upload the Project
+echo -e "${GREEN}Starting NC Business Atlas Installer...${NC}"
 
-Navigate to the web directory.
+# --- 1. OS Detection & System Deps ---
+if [ -f /etc/os-release ]; then
+    . /etc/os-release
+    OS=$ID
+else
+    echo -e "${RED}❌ Cannot detect OS. /etc/os-release not found.${NC}"
+    exit 1
+fi
 
-```bash
-cd /var/www
-```
+echo -e "${YELLOW}👉 Detected OS: $OS${NC}"
+echo -e "${YELLOW}📦 Installing system dependencies...${NC}"
 
-**Option A: Git Clone (Recommended)**
-```bash
-# Replace with your actual repository URL
-sudo git clone https://github.com/yourusername/nc-business-atlas.git
-sudo chown -R $USER:$USER nc-business-atlas
-cd nc-business-atlas
-```
+if [[ "$OS" == "ubuntu" || "$OS" == "debian" ]]; then
+    sudo apt-get update
+    sudo apt-get install -y curl git unzip build-essential
+    # Install Node.js 20.x
+    if ! command -v node &> /dev/null; then
+        echo "   Installing Node.js 20.x..."
+        curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+        sudo apt-get install -y nodejs
+    fi
 
-**Option B: Upload Manually**
-If you don't have a git repo, you can upload your project files via SFTP (FileZilla) or SCP to `/var/www/nc-business-atlas`.
+elif [[ "$OS" == "fedora" ]]; then
+    sudo dnf install -y git nodejs unzip make gcc-c++ findutils
 
-### Step 4: Install Dependencies & Build
+elif [[ "$OS" == "opensuse" || "$OS" == "opensuse-leap" || "$OS" == "opensuse-tumbleweed" ]]; then
+    sudo zypper refresh
+    sudo zypper install -y git nodejs npm unzip patterns-devel-base-devel_basics
 
-Install the required npm packages.
+elif [[ "$OS" == "arch" ]]; then
+    sudo pacman -Syu --noconfirm git nodejs npm unzip base-devel
 
-```bash
+else
+    echo -e "${RED}❌ OS '$OS' not directly supported by this script.${NC}"
+    echo "Please install Node.js (v20+), NPM, and Git manually, then run this script again."
+    exit 1
+fi
+
+# Verify Node installation
+NODE_VER=$(node -v)
+echo -e "${GREEN}✅ Node.js $NODE_VER installed.${NC}"
+
+# --- 2. API Key Configuration ---
+if [ ! -f ".env" ]; then
+    echo -e "${YELLOW}🔑 No .env file found.${NC}"
+    echo -n "👉 Please enter your Google Gemini API Key: "
+    read API_KEY
+    
+    if [ -z "$API_KEY" ]; then
+        echo -e "${RED}❌ API Key is required for the build process.${NC}"
+        exit 1
+    fi
+    
+    echo "VITE_API_KEY=$API_KEY" > .env
+    echo -e "${GREEN}✅ .env file created.${NC}"
+else
+    echo -e "${GREEN}✅ .env file exists.${NC}"
+fi
+
+# --- 3. App Setup & Build ---
+echo -e "${YELLOW}🛠️  Installing NPM dependencies...${NC}"
 npm install
-```
 
-Create an environment file for your API Key.
+echo -e "${YELLOW}➕ Installing Express server...${NC}"
+npm install express
 
-```bash
-nano .env
-```
+echo -e "${YELLOW}⚙️  Installing PM2 (Process Manager)...${NC}"
+sudo npm install -g pm2
 
-Add the following line inside the file:
-```env
-# If using Vite
-VITE_API_KEY=your_actual_google_gemini_api_key_here
-# If using Create React App
-REACT_APP_API_KEY=your_actual_google_gemini_api_key_here
-```
-*(Save and exit: Press `Ctrl+O`, `Enter`, `Ctrl+X`)*
-
-Build the production version of the app.
-
-```bash
+echo -e "${YELLOW}🏗️  Building Application...${NC}"
 npm run build
+
+if [ ! -d "dist" ]; then
+    echo -e "${RED}❌ Build failed. 'dist' directory missing.${NC}"
+    exit 1
+fi
+
+# --- 4. Start Server ---
+echo -e "${YELLOW}🚀 Starting Server on Port $PORT...${NC}"
+
+# Stop existing if any
+pm2 delete $SERVICE_NAME 2>/dev/null || true
+
+# Start
+pm2 start server.js --name "$SERVICE_NAME"
+
+# Save list
+pm2 save
+
+echo -e "${YELLOW}🔄 Setting up PM2 Startup Hook...${NC}"
+# Generate startup script and execute it
+# This handles the sudo requirement for systemd integration
+PM2_STARTUP=$(pm2 startup | grep "sudo env" || true)
+if [ ! -z "$PM2_STARTUP" ]; then
+    eval $PM2_STARTUP
+fi
+
+echo -e "${GREEN}==============================================${NC}"
+echo -e "${GREEN}✅ INSTALLATION COMPLETE!${NC}"
+echo -e "${GREEN}==============================================${NC}"
+echo -e "👉 App is running internally on: ${YELLOW}http://0.0.0.0:$PORT${NC}"
+echo -e "👉 Configure your Nginx/Reverse Proxy to forward to this address."
+echo -e "👉 View logs with: ${YELLOW}pm2 logs $SERVICE_NAME${NC}"
+
+EOF
+
+# Make executable and run
+chmod +x setup.sh
+sudo ./setup.sh
 ```
-
-This will create a `dist` (for Vite) or `build` (for CRA) directory containing the optimized HTML, CSS, and JS files.
-
-### Step 5: Configure Nginx
-
-Create a new Nginx server block configuration.
-
-```bash
-sudo nano /etc/nginx/sites-available/nc-atlas
-```
-
-Paste the following configuration. **Important:** Change `your_domain_or_ip` to your server's IP address or domain name. Ensure the `root` path points to your build folder (`/dist` or `/build`).
-
-```nginx
-server {
-    listen 80;
-    server_name your_domain_or_ip;
-
-    # Point this to the 'dist' folder created by 'npm run build'
-    root /var/www/nc-business-atlas/dist; 
-    index index.html;
-
-    # Serve the React App
-    location / {
-        try_files $uri $uri/ /index.html;
-    }
-
-    # Optional: Cache static assets for better performance
-    location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg)$ {
-        expires 30d;
-        add_header Cache-Control "public, no-transform";
-    }
-
-    # Gzip Compression
-    gzip on;
-    gzip_types text/plain text/css application/json application/javascript text/xml application/xml application/xml+rss text/javascript;
-}
-```
-*(Save and exit: `Ctrl+O`, `Enter`, `Ctrl+X`)*
-
-Enable the site configuration:
-
-```bash
-sudo ln -s /etc/nginx/sites-available/nc-atlas /etc/nginx/sites-enabled/
-```
-
-Remove the default Nginx page (optional):
-```bash
-sudo rm /etc/nginx/sites-enabled/default
-```
-
-Test the Nginx configuration for errors:
-```bash
-sudo nginx -t
-```
-
-If the test is successful, restart Nginx:
-```bash
-sudo systemctl restart nginx
-```
-
-### Step 6: (Optional) Setup SSL with Certbot
-
-If you are using a domain name, it is highly recommended to secure your site with HTTPS.
-
-```bash
-sudo apt install -y certbot python3-certbot-nginx
-sudo certbot --nginx -d yourdomain.com -d www.yourdomain.com
-```
-
-Follow the on-screen prompts. Certbot will automatically modify your Nginx configuration to serve HTTPS.
-
----
-
-### Troubleshooting
-
-- **404 on Refresh**: If you refresh a specific page and get a 404, ensure the `try_files $uri $uri/ /index.html;` line exists in your Nginx config. This redirects all requests to React's router.
-- **Permissions**: If Nginx returns a "403 Forbidden", ensure Nginx has read access to your folder:
-  ```bash
-  sudo chown -R www-data:www-data /var/www/nc-business-atlas/dist
-  sudo chmod -R 755 /var/www/nc-business-atlas
-  ```
