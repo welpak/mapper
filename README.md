@@ -4,31 +4,36 @@ A dynamic, D3-powered geospatial visualization tool for exploring business data 
 
 ## Server Installation
 
-This repository contains a **single setup script** (`setup.sh`) that automates the deployment on **Ubuntu, Debian, Fedora, OpenSUSE, and Arch Linux**.
+This repository contains a **bootstrap setup script** that automates the deployment on **Ubuntu, Debian, Fedora, OpenSUSE, and Arch Linux**.
 
 It performs the following:
 1. Detects the Operating System.
-2. Installs system dependencies (Node.js 20+, Git, Build Tools).
-3. Prompts for your **Gemini API Key** (if not configured).
-4. Installs project dependencies & builds the application.
-5. Sets up an **Express.js** server managed by **PM2**.
-6. Serves the app on port **3030** (Host: `0.0.0.0`).
+2. Installs **Git** (if missing).
+3. **Clones** this repository.
+4. Installs system dependencies (Node.js 20+, Build Tools).
+5. Prompts for your **Gemini API Key**.
+6. Builds the app and starts the **Express.js** server via **PM2** on port **3030**.
 
 ### Instructions
 
-1.  **Upload** the project files to your server.
-2.  **Run** the following command in the project directory:
+1.  SSH into your server.
+2.  Create the installer script:
+    ```bash
+    nano setup.sh
+    ```
+3.  Paste the code below into the file. **IMPORTANT:** Update the `REPO_URL` variable at the top with your actual repository URL.
 
 ```bash
-# Create the script
-cat << 'EOF' > setup.sh
 #!/bin/bash
 set -e
 
 # --- Configuration ---
+# REPLACE THIS WITH YOUR REPO URL
+REPO_URL="https://github.com/your-username/nc-business-atlas.git" 
+
 PORT=3030
 SERVICE_NAME="nc-atlas"
-APP_DIR=$(pwd)
+TARGET_DIR="nc-business-atlas"
 
 # Colors
 GREEN='\033[0;32m'
@@ -38,7 +43,7 @@ NC='\033[0m' # No Color
 
 echo -e "${GREEN}Starting NC Business Atlas Installer...${NC}"
 
-# --- 1. OS Detection & System Deps ---
+# --- 1. OS Detection & Git Installation ---
 if [ -f /etc/os-release ]; then
     . /etc/os-release
     OS=$ID
@@ -48,11 +53,43 @@ else
 fi
 
 echo -e "${YELLOW}👉 Detected OS: $OS${NC}"
+echo -e "${YELLOW}📦 Checking for Git...${NC}"
+
+if ! command -v git &> /dev/null; then
+    echo "   Git not found. Installing..."
+    if [[ "$OS" == "ubuntu" || "$OS" == "debian" ]]; then
+        sudo apt-get update && sudo apt-get install -y git
+    elif [[ "$OS" == "fedora" ]]; then
+        sudo dnf install -y git
+    elif [[ "$OS" == "opensuse" || "$OS" == "opensuse-leap" || "$OS" == "opensuse-tumbleweed" ]]; then
+        sudo zypper install -y git
+    elif [[ "$OS" == "arch" ]]; then
+        sudo pacman -Syu --noconfirm git
+    else
+        echo -e "${RED}❌ Cannot install Git automatically on $OS. Please install it manually.${NC}"
+        exit 1
+    fi
+else
+    echo -e "${GREEN}✅ Git is already installed.${NC}"
+fi
+
+# --- 2. Clone Repository ---
+if [ -d "$TARGET_DIR" ]; then
+    echo -e "${YELLOW}📂 Directory '$TARGET_DIR' already exists. Pulling latest changes...${NC}"
+    cd "$TARGET_DIR"
+    git pull
+else
+    echo -e "${YELLOW}wv Cloning repository...${NC}"
+    git clone "$REPO_URL" "$TARGET_DIR"
+    cd "$TARGET_DIR"
+fi
+
+# --- 3. System Dependencies (Node.js & Build Tools) ---
 echo -e "${YELLOW}📦 Installing system dependencies...${NC}"
 
 if [[ "$OS" == "ubuntu" || "$OS" == "debian" ]]; then
     sudo apt-get update
-    sudo apt-get install -y curl git unzip build-essential
+    sudo apt-get install -y curl unzip build-essential
     # Install Node.js 20.x
     if ! command -v node &> /dev/null; then
         echo "   Installing Node.js 20.x..."
@@ -61,26 +98,21 @@ if [[ "$OS" == "ubuntu" || "$OS" == "debian" ]]; then
     fi
 
 elif [[ "$OS" == "fedora" ]]; then
-    sudo dnf install -y git nodejs unzip make gcc-c++ findutils
+    sudo dnf install -y nodejs unzip make gcc-c++ findutils
 
 elif [[ "$OS" == "opensuse" || "$OS" == "opensuse-leap" || "$OS" == "opensuse-tumbleweed" ]]; then
-    sudo zypper refresh
-    sudo zypper install -y git nodejs npm unzip patterns-devel-base-devel_basics
+    sudo zypper install -y nodejs npm unzip patterns-devel-base-devel_basics
 
 elif [[ "$OS" == "arch" ]]; then
-    sudo pacman -Syu --noconfirm git nodejs npm unzip base-devel
+    sudo pacman -Syu --noconfirm nodejs npm unzip base-devel
 
-else
-    echo -e "${RED}❌ OS '$OS' not directly supported by this script.${NC}"
-    echo "Please install Node.js (v20+), NPM, and Git manually, then run this script again."
-    exit 1
 fi
 
 # Verify Node installation
 NODE_VER=$(node -v)
 echo -e "${GREEN}✅ Node.js $NODE_VER installed.${NC}"
 
-# --- 2. API Key Configuration ---
+# --- 4. API Key Configuration ---
 if [ ! -f ".env" ]; then
     echo -e "${YELLOW}🔑 No .env file found.${NC}"
     echo -n "👉 Please enter your Google Gemini API Key: "
@@ -97,7 +129,7 @@ else
     echo -e "${GREEN}✅ .env file exists.${NC}"
 fi
 
-# --- 3. App Setup & Build ---
+# --- 5. App Setup & Build ---
 echo -e "${YELLOW}🛠️  Installing NPM dependencies...${NC}"
 npm install
 
@@ -115,7 +147,7 @@ if [ ! -d "dist" ]; then
     exit 1
 fi
 
-# --- 4. Start Server ---
+# --- 6. Start Server ---
 echo -e "${YELLOW}🚀 Starting Server on Port $PORT...${NC}"
 
 # Stop existing if any
@@ -129,7 +161,6 @@ pm2 save
 
 echo -e "${YELLOW}🔄 Setting up PM2 Startup Hook...${NC}"
 # Generate startup script and execute it
-# This handles the sudo requirement for systemd integration
 PM2_STARTUP=$(pm2 startup | grep "sudo env" || true)
 if [ ! -z "$PM2_STARTUP" ]; then
     eval $PM2_STARTUP
@@ -141,10 +172,10 @@ echo -e "${GREEN}==============================================${NC}"
 echo -e "👉 App is running internally on: ${YELLOW}http://0.0.0.0:$PORT${NC}"
 echo -e "👉 Configure your Nginx/Reverse Proxy to forward to this address."
 echo -e "👉 View logs with: ${YELLOW}pm2 logs $SERVICE_NAME${NC}"
-
-EOF
-
-# Make executable and run
-chmod +x setup.sh
-sudo ./setup.sh
 ```
+
+4.  Make executable and run:
+    ```bash
+    chmod +x setup.sh
+    sudo ./setup.sh
+    ```
